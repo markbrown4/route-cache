@@ -78,6 +78,7 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
         subscriber = queues[key].shift()
         process.nextTick(subscriber)
       }
+      delete queues[key]
 
       if (isJson) {
         res.original_json(body)
