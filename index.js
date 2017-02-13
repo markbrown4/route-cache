@@ -2,7 +2,6 @@
 var LRU = require('lru-cache')
 
 var queues = {}
-var redirects = {}
 var defaults = {
   max: 64 * 1000000, // ~64mb
   length: function (n, key) {
@@ -33,15 +32,14 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
       key = cacheKey
     }
 
-    if (redirects[key]) {
-      return res.redirect(redirects[key].status, redirects[key].url)
-    }
     var value = cacheStore.get(key)
 
     if (value) {
       // returns the value immediately
       if (value.isJson) {
         res.json(value.body)
+      } else if (value.isRedirect) {
+        res.redirect(301, value.body)
       } else {
         res.send(value.body)
       }
@@ -58,7 +56,7 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
 
     var didHandle = false
 
-    function rawSend (data, isJson) {
+    function rawSend (data, isJson, isRedirect) {
       // pass-through for Buffer - not supported
       if (typeof data === 'object') {
         if (Buffer.isBuffer(data)) {
@@ -71,7 +69,7 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
 
       didHandle = true
       var body = data instanceof Buffer ? data.toString() : data
-      if (res.statusCode < 400) cacheStore.set(key, { body: body, isJson: isJson }, ttl)
+      if (res.statusCode < 400) cacheStore.set(key, { body: body, isJson: isJson, isRedirect: isRedirect }, ttl)
 
       // drain the queue so anyone else waiting for
       // this value will get their responses.
@@ -83,6 +81,8 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
 
       if (isJson) {
         res.original_json(body)
+      } else if (isRedirect) {
+        res.original_redirect(301, body)
       } else {
         res.original_send(body)
       }
@@ -98,33 +98,29 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
         if (didHandle) {
           res.original_send(data)
         } else {
-          rawSend(data, false)
+          rawSend(data, false, false)
         }
       }
 
       res.json = function (data) {
-        rawSend(data, true)
+        rawSend(data, true, false)
       }
 
       // If response happens to be a redirect -- store it to redirect all
       // subsequent requests.
       res.redirect = function (url) {
         var address = url
-        var status = 302
 
         // allow statusCode for 301 redirect. See: https://github.com/expressjs/express/blob/master/lib/response.js#L857
         if (arguments.length === 2) {
           if (typeof arguments[0] === 'number') {
-            status = arguments[0]
             address = arguments[1]
           } else {
             console.log('res.redirect(url, status): Use res.redirect(status, url) instead')
-            status = arguments[1]
           }
         }
 
-        redirects[key] = {url: address, status: status}
-        res.original_redirect(status, address)
+        rawSend(address, false, true)
       }
 
       next()
@@ -134,6 +130,8 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
         var value = cacheStore.get(key) || {}
         if (value.isJson) {
           res.json(value.body)
+        } else if (value.isRedirect) {
+          res.redirect(301, value.body)
         } else {
           res.send(value.body)
         }
@@ -143,9 +141,6 @@ module.exports.cacheSeconds = function (secondsTTL, cacheKey) {
 }
 
 module.exports.removeCache = function (url) {
-  if (redirects[url]) {
-    delete redirects[url]
-  }
   cacheStore.del(url)
 }
 
